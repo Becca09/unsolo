@@ -1,0 +1,19 @@
+{
+  "name": "@unsolo/utils",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo"
+  },
+  "devDependencies": {
+    "@unsolo/config": "workspace:*",
+    "typescript": "^5.7.3",
+    "eslint": "^9.18.0"
+  }
+}

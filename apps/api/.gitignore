@@ -1,0 +1,7 @@
+# NestJS build output
+dist/
+
+# Testing
+coverage/
+
+*.tsbuildinfo

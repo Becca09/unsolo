@@ -1,0 +1,10 @@
+node_modules
+.next
+dist
+.turbo
+coverage
+pnpm-lock.yaml
+database/migrations/meta
+apps/web/public/sw.js
+apps/web/public/swe-worker*.js
+apps/web/public/workbox-*.js
