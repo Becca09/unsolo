@@ -1,19 +1,21 @@
 import { Module } from "@nestjs/common";
+import { AuthModule } from "../auth/auth.module";
+import { DatabaseModule } from "../../infra/database/database.module";
+import { UsersService } from "./application/users.service";
+import { UsersRepository } from "./infrastructure/users.repository";
+import { UsersController } from "./presentation/users.controller";
 
 /**
- * UsersModule — architectural skeleton (Phase A — Foundation).
+ * UsersModule — Phase B2.1 user data model.
  *
- * This module intentionally has no controllers, providers, or business
- * logic yet. Its purpose in this phase is only to establish the domain
- * boundary and layering convention that will be filled in during the
- * implementation phase for this domain:
- *
- *   presentation/    -> controllers, request/response DTOs, module-specific guards
- *   application/     -> use-cases/services (orchestration, domain rules)
- *   domain/          -> entities, value objects, state machines
- *   infrastructure/  -> Drizzle repositories, external integration adapters
- *
- * See docs/architecture-proposal.md for the full module boundary rationale.
+ * Manages the Unsolo user record (1:1 with the Supabase Auth identity) and
+ * the user-owned username. Exposes UsersService so other modules can
+ * provision/resolve the user record for the authenticated identity.
  */
-@Module({})
+@Module({
+  imports: [AuthModule, DatabaseModule],
+  providers: [UsersService, UsersRepository],
+  controllers: [UsersController],
+  exports: [UsersService],
+})
 export class UsersModule {}

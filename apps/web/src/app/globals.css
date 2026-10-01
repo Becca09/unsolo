@@ -1,3 +1,53 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-unsolo-light text-unsolo-primary antialiased;
+  }
+}
+
+@layer utilities {
+  .card {
+    @apply border-unsolo-border bg-unsolo-surface rounded-2xl border shadow-sm transition-all duration-300 hover:shadow-md;
+  }
+
+  .badge {
+    @apply border-unsolo-border bg-unsolo-light text-unsolo-primary inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium;
+  }
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slow-pan {
+  0% {
+    transform: scale(1.05) translate(0, 0);
+  }
+
+  100% {
+    transform: scale(1.12) translate(-1%, -1%);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.8s ease-out forwards;
+}
+
+.animate-slow-pan {
+  animation: slow-pan 20s ease-in-out infinite alternate;
+}
