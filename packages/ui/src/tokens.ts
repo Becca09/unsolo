@@ -10,6 +10,13 @@ export const colors = {
   primary: "#1F2F10",
   accent: "#6D8D08",
   neutral: "#E4E9DD",
+  muted: "#6F7168",
+  light: "#F4F2EA",
+  surface: "#FFFFFF",
+  border: "#E4E2D9",
+  subtle: "#E9E7DF",
+  sage: "#B9C68A",
+  moss: "#4A5A1F",
 } as const;
 
 export type UnsoloColorToken = keyof typeof colors;
