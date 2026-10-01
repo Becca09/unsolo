@@ -1,19 +1,21 @@
 import { Module } from "@nestjs/common";
+import { AuthService } from "./application/auth.service";
+import { AuthGuard } from "./presentation/auth.guard";
+import { AuthController } from "./presentation/auth.controller";
+import { SupabaseService } from "./infrastructure/supabase.service";
 
 /**
- * AuthModule — architectural skeleton (Phase A — Foundation).
+ * AuthModule — Phase B authentication foundation.
  *
- * This module intentionally has no controllers, providers, or business
- * logic yet. Its purpose in this phase is only to establish the domain
- * boundary and layering convention that will be filled in during the
- * implementation phase for this domain:
- *
- *   presentation/    -> controllers, request/response DTOs, module-specific guards
- *   application/     -> use-cases/services (orchestration, domain rules)
- *   domain/          -> entities, value objects, state machines
- *   infrastructure/  -> Drizzle repositories, external integration adapters
- *
- * See docs/architecture-proposal.md for the full module boundary rationale.
+ * Provides:
+ *   - AuthService: verifies Supabase-issued JWTs
+ *   - AuthGuard: protects routes with Bearer token validation
+ *   - SupabaseService: backend-only service-role client
+ *   - AuthController: /auth/me test endpoint
  */
-@Module({})
+@Module({
+  providers: [AuthService, AuthGuard, SupabaseService],
+  controllers: [AuthController],
+  exports: [AuthService, AuthGuard, SupabaseService],
+})
 export class AuthModule {}
