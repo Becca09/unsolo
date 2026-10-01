@@ -1,6 +1,6 @@
 import { Injectable, UnauthorizedException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { jwtVerify, createRemoteJWKSet, JWTPayload } from "jose";
+import { jwtVerify, createRemoteJWKSet, JWTPayload, decodeProtectedHeader } from "jose";
 
 export interface AuthenticatedUser {
   sub: string;
@@ -9,32 +9,39 @@ export interface AuthenticatedUser {
 }
 
 /**
- * Verifies Supabase-issued access tokens using the Supabase JWT secret.
+ * Verifies Supabase-issued access tokens.
  *
- * In a local/development environment the JWT can be verified against the
- * configured `SUPABASE_JWT_SECRET`. In production, Supabase signs tokens with
- * an asymmetric key; the verifier can be extended to fetch the project's
- * public JWKS from the Supabase `.well-known/jwks.json` endpoint.
+ * The token header's `alg` determines the verifier:
+ * - `HS256` -> verify against the configured `SUPABASE_JWT_SECRET`.
+ * - `RS256`, `ES256`, etc. -> verify against the Supabase Auth JWKS endpoint
+ *   at `${SUPABASE_URL}/auth/v1/.well-known/jwks.json`.
  */
 @Injectable()
 export class AuthService {
   private readonly jwks: ReturnType<typeof createRemoteJWKSet> | undefined;
 
+  private readonly issuer?: string;
+
   constructor(private config: ConfigService) {
     const url = this.config.get<string>("SUPABASE_URL");
     if (url) {
-      this.jwks = createRemoteJWKSet(new URL(`${url}/.well-known/jwks.json`));
+      const base = url.replace(/\/$/, "");
+      this.issuer = `${base}/auth/v1`;
+      this.jwks = createRemoteJWKSet(new URL(`${this.issuer}/.well-known/jwks.json`));
     }
   }
 
   async verifyAccessToken(token: string): Promise<AuthenticatedUser> {
-    const secret = this.config.get<string>("SUPABASE_JWT_SECRET");
-    const url = this.config.get<string>("SUPABASE_URL");
+    const header = decodeProtectedHeader(token);
 
+    const secret = this.config.get<string>("SUPABASE_JWT_SECRET");
     let payload: JWTPayload;
 
     try {
-      if (secret) {
+      if (header.alg === "HS256") {
+        if (!secret) {
+          throw new UnauthorizedException("Supabase auth is not configured");
+        }
         const encoder = new TextEncoder();
         const { payload: verified } = await jwtVerify(token, encoder.encode(secret), {
           algorithms: ["HS256"],
@@ -42,8 +49,7 @@ export class AuthService {
         payload = verified;
       } else if (this.jwks) {
         const { payload: verified } = await jwtVerify(token, this.jwks, {
-          issuer: url,
-          algorithms: ["RS256"],
+          issuer: this.issuer,
         });
         payload = verified;
       } else {

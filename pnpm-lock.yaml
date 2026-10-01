@@ -44,6 +44,9 @@ importers:
       '@supabase/supabase-js':
         specifier: ^2.47.0
         version: 2.112.3
+      '@unsolo/database':
+        specifier: workspace:*
+        version: link:../../database
       '@unsolo/types':
         specifier: workspace:*
         version: link:../../packages/types
@@ -53,6 +56,9 @@ importers:
       '@unsolo/validation':
         specifier: workspace:*
         version: link:../../packages/validation
+      drizzle-orm:
+        specifier: ^0.38.3
+        version: 0.38.4(@types/react@19.2.18)(postgres@3.4.9)(react@19.2.8)
       jose:
         specifier: ^5.9.6
         version: 5.10.0
@@ -257,6 +263,9 @@ importers:
 
   packages/validation:
     dependencies:
+      '@unsolo/types':
+        specifier: workspace:*
+        version: link:../types
       zod:
         specifier: ^3.24.1
         version: 3.25.76

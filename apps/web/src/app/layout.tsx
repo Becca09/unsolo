@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from "next";
 import { Sora } from "next/font/google";
-import { Navbar } from "@/components/Navbar";
 import "./globals.css";
 
 const sora = Sora({ subsets: ["latin"], variable: "--font-sora" });
@@ -23,8 +22,7 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${sora.variable}`}>
-      <body className="font-sans">
-        <Navbar />
+      <body className="font-sans" suppressHydrationWarning>
         {children}
       </body>
     </html>

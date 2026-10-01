@@ -11,6 +11,15 @@ const PUBLIC_ROUTES = [
 ];
 
 export async function middleware(request: NextRequest) {
+  // /auth/callback performs its own code exchange in the route handler.
+  // Running supabase.auth.getUser() here can delete the pending PKCE code
+  // verifier: when the request carries a stale session, getUser() triggers
+  // _removeSession() → removeAllPKCEVerifiers(), which clears all
+  // `-code-verifier` cookies before the route handler can read them.
+  if (request.nextUrl.pathname === "/auth/callback") {
+    return NextResponse.next({ request });
+  }
+
   let supabaseResponse = NextResponse.next({
     request,
   });
@@ -70,5 +79,7 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"],
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|sw.js|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+  ],
 };

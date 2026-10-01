@@ -111,15 +111,3 @@ export async function forgotPassword(
 
   return { success: true, email };
 }
-
-export async function logout(): Promise<AuthResult> {
-  const supabase = await createClient();
-  const { error } = await supabase.auth.signOut();
-
-  if (error) {
-    return { success: false, error: normalizeError(error) };
-  }
-
-  revalidatePath("/");
-  redirect("/");
-}

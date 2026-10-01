@@ -1,26 +1,15 @@
 "use client";
 
-import { useActionState, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useActionState } from "react";
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/client";
 import { forgotPassword } from "@/actions/auth";
 
 export default function ForgotPasswordPage() {
-  const router = useRouter();
   const [state, formAction, isPending] = useActionState(forgotPassword, null);
-  const [backLoading, setBackLoading] = useState(false);
 
   const success = state?.success ?? false;
   const error = (state && !state.success ? state.error : null) ?? null;
   const email = (state?.success ? state.email : "") ?? "";
-
-  async function goToLogin() {
-    setBackLoading(true);
-    const supabase = createClient();
-    await supabase.auth.signOut();
-    router.push("/login");
-  }
 
   if (success) {
     return (
@@ -31,14 +20,12 @@ export default function ForgotPasswordPage() {
             If an account exists for <strong className="text-unsolo-primary">{email}</strong>, you
             will receive a password reset link.
           </p>
-          <button
-            type="button"
-            onClick={goToLogin}
-            disabled={backLoading}
-            className="bg-unsolo-accent mt-6 inline-block rounded-full px-7 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-60"
+          <Link
+            href="/login"
+            className="bg-unsolo-accent mt-6 inline-block rounded-full px-7 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90"
           >
-            {backLoading ? "Signing out..." : "Back to login"}
-          </button>
+            Back to login
+          </Link>
         </div>
       </main>
     );
