@@ -30,6 +30,10 @@ function makePayout(overrides: Partial<PayoutAccount> = {}): PayoutAccount {
     profileId: PROFILE_ID,
     provider: "stripe",
     providerAccountId: "acct_test_123",
+    bankName: null,
+    bankCode: null,
+    accountNumber: null,
+    accountName: null,
     displayLabel: "Stripe account",
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -55,7 +59,9 @@ describe("PayoutAccountsService", () => {
       delete: jest.fn(),
     } as unknown as jest.Mocked<PayoutAccountsRepository>;
 
-    service = new PayoutAccountsService(profiles, payouts);
+    service = new PayoutAccountsService(profiles, payouts, {
+      resolveBankAccount: jest.fn().mockResolvedValue({}),
+    });
   });
 
   describe("list", () => {
@@ -114,6 +120,77 @@ describe("PayoutAccountsService", () => {
 
       await expect(service.create(AUTH_USER_ID, PROFILE_ID, input)).rejects.toBeInstanceOf(
         ConflictException,
+      );
+    });
+
+    it("stores bank details for local payouts and masks the account number", async () => {
+      profiles.findById.mockResolvedValue(makeProfile());
+      payouts.create.mockResolvedValue(
+        makePayout({
+          provider: "local",
+          providerAccountId: null,
+          bankName: "GTBank",
+          bankCode: "058",
+          accountNumber: "0123456789",
+          accountName: "Ada Lovelace",
+          displayLabel: "GTBank ••••6789",
+        }),
+      );
+
+      const result = await service.create(AUTH_USER_ID, PROFILE_ID, {
+        provider: "local",
+        bankName: "GTBank",
+        bankCode: "058",
+        accountNumber: "0123456789",
+        accountName: "Ada Lovelace",
+      });
+
+      expect(payouts.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "local",
+          bankName: "GTBank",
+          bankCode: "058",
+          accountNumber: "0123456789",
+          accountName: "Ada Lovelace",
+          displayLabel: "GTBank ••••6789",
+        }),
+      );
+      expect(result.accountNumberMasked).toBe("••••6789");
+      expect(result).not.toHaveProperty("accountNumber");
+      expect(result).not.toHaveProperty("providerAccountId");
+    });
+
+    it("prefers the provider-resolved account name over the entered one", async () => {
+      profiles.findById.mockResolvedValue(makeProfile());
+      const resolver = {
+        resolveBankAccount: jest.fn().mockResolvedValue({ accountName: "ADAEZE LOVELACE" }),
+      };
+      const svc = new PayoutAccountsService(profiles, payouts, resolver);
+      payouts.create.mockResolvedValue(
+        makePayout({
+          provider: "local",
+          providerAccountId: null,
+          bankName: "GTBank",
+          bankCode: "058",
+          accountNumber: "0123456789",
+          accountName: "ADAEZE LOVELACE",
+        }),
+      );
+
+      await svc.create(AUTH_USER_ID, PROFILE_ID, {
+        provider: "local",
+        bankName: "GTBank",
+        bankCode: "058",
+        accountNumber: "0123456789",
+        accountName: "ada lovelace",
+      });
+
+      expect(resolver.resolveBankAccount).toHaveBeenCalledWith(
+        { bankName: "GTBank", bankCode: "058" },
+        "0123456789",
+      );
+      expect(payouts.create).toHaveBeenCalledWith(
+        expect.objectContaining({ accountName: "ADAEZE LOVELACE" }),
       );
     });
   });

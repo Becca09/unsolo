@@ -6,6 +6,7 @@ import {
   plannerProfiles,
   profiles,
   travellerProfiles,
+  type BusinessProfile,
   type Profile,
   type ProfileType,
 } from "@unsolo/database";
@@ -92,5 +93,34 @@ export class ProfilesRepository {
       .where(eq(profiles.id, id))
       .returning();
     return row;
+  }
+
+  async findBusinessProfile(profileId: string): Promise<BusinessProfile | undefined> {
+    const [row] = await this.database.db
+      .select()
+      .from(businessProfiles)
+      .where(eq(businessProfiles.profileId, profileId))
+      .limit(1);
+    return row;
+  }
+
+  async updateBusinessProfile(
+    profileId: string,
+    data: { tagline?: string; phone?: string },
+  ): Promise<BusinessProfile | undefined> {
+    const [row] = await this.database.db
+      .update(businessProfiles)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(businessProfiles.profileId, profileId))
+      .returning();
+    return row;
+  }
+
+  /** Sets or clears the admin approval flag on a business profile. */
+  async setBusinessApproved(profileId: string, approved: boolean): Promise<void> {
+    await this.database.db
+      .update(businessProfiles)
+      .set({ approvedAt: approved ? new Date() : null, updatedAt: new Date() })
+      .where(eq(businessProfiles.profileId, profileId));
   }
 }

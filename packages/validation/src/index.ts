@@ -11,7 +11,15 @@
  */
 
 import { z } from "zod";
-import { PROFILE_TYPES, SOCIAL_PLATFORMS, PAYOUT_PROVIDERS } from "@unsolo/types";
+import {
+  PROFILE_TYPES,
+  SOCIAL_PLATFORMS,
+  PAYOUT_PROVIDERS,
+  BUSINESS_VERIFICATION_STATUSES,
+  VERIFICATION_DOCUMENT_TYPES,
+  VERIFICATION_DOCUMENT_MIME_TYPES,
+  VERIFICATION_DOCUMENT_MAX_BYTES,
+} from "@unsolo/types";
 
 export const HealthCheckResponseSchema = z.object({
   status: z.literal("ok"),
@@ -120,16 +128,138 @@ export type UpdateAddressInput = z.infer<typeof UpdateAddressSchema>;
 
 export const PayoutProviderSchema = z.enum(PAYOUT_PROVIDERS);
 
-export const CreatePayoutAccountSchema = z.object({
-  provider: PayoutProviderSchema,
-  providerAccountId: z.string().trim().min(1).max(255),
-  displayLabel: z.string().trim().min(1).max(120).optional(),
-});
+/**
+ * Nigerian NUBAN account number — exactly 10 digits.
+ */
+export const BankAccountNumberSchema = z
+  .string()
+  .trim()
+  .regex(/^\d{10}$/, "Account number must be exactly 10 digits");
+
+export const CreatePayoutAccountSchema = z.discriminatedUnion("provider", [
+  z.object({
+    provider: z.literal("stripe"),
+    providerAccountId: z.string().trim().min(1).max(255),
+    displayLabel: z.string().trim().min(1).max(120).optional(),
+  }),
+  z.object({
+    provider: z.literal("local"),
+    bankName: z.string().trim().min(1).max(120),
+    bankCode: z.string().trim().min(1).max(20).optional(),
+    accountNumber: BankAccountNumberSchema,
+    accountName: z.string().trim().min(1).max(120),
+    displayLabel: z.string().trim().min(1).max(120).optional(),
+  }),
+]);
 
 export type CreatePayoutAccountInput = z.infer<typeof CreatePayoutAccountSchema>;
 
-export const UpdatePayoutAccountSchema = CreatePayoutAccountSchema.omit({
-  provider: true,
-}).partial();
+export const UpdatePayoutAccountSchema = z
+  .object({
+    providerAccountId: z.string().trim().min(1).max(255),
+    bankName: z.string().trim().min(1).max(120),
+    bankCode: z.string().trim().min(1).max(20),
+    accountNumber: BankAccountNumberSchema,
+    accountName: z.string().trim().min(1).max(120),
+    displayLabel: z.string().trim().min(1).max(120),
+  })
+  .partial();
 
 export type UpdatePayoutAccountInput = z.infer<typeof UpdatePayoutAccountSchema>;
+
+/**
+ * Phase B2.6 — business profile details & verification.
+ */
+
+const PhoneSchema = z
+  .string()
+  .trim()
+  .min(7)
+  .max(20)
+  .regex(/^\+?[0-9][0-9\s\-()]*$/, "Enter a valid phone number");
+
+export const UpdateBusinessProfileSchema = z
+  .object({
+    tagline: z.string().trim().max(160),
+    phone: PhoneSchema,
+  })
+  .partial();
+
+export type UpdateBusinessProfileInput = z.infer<typeof UpdateBusinessProfileSchema>;
+
+export const BusinessVerificationStatusSchema = z.enum(BUSINESS_VERIFICATION_STATUSES);
+
+const verificationPart = z.string().trim().min(1).max(120);
+
+export const SubmitBusinessVerificationSchema = z.object({
+  legalName: verificationPart,
+  nin: z
+    .string()
+    .trim()
+    .regex(/^\d{11}$/, "NIN must be exactly 11 digits"),
+  bvn: z
+    .string()
+    .trim()
+    .regex(/^\d{11}$/, "BVN must be exactly 11 digits")
+    .optional()
+    .or(z.literal("").transform(() => undefined)),
+  phone: PhoneSchema,
+  country: verificationPart,
+  state: verificationPart,
+  city: verificationPart,
+  lga: verificationPart,
+  street: verificationPart,
+});
+
+export type SubmitBusinessVerificationInput = z.infer<typeof SubmitBusinessVerificationSchema>;
+
+/**
+ * Verification document upload request — metadata only. The API validates
+ * this, issues a signed upload URL for the private storage bucket, and the
+ * client PUTs the file directly to storage before confirming. File bytes
+ * never pass through the API.
+ */
+export const RequestDocumentUploadSchema = z.object({
+  type: z.enum(VERIFICATION_DOCUMENT_TYPES),
+  fileName: z
+    .string()
+    .trim()
+    .min(1)
+    .max(255)
+    .regex(/^[^/\\:*?"<>|]+$/, "File name contains invalid characters"),
+  mimeType: z.enum(VERIFICATION_DOCUMENT_MIME_TYPES),
+  sizeBytes: z
+    .number()
+    .int()
+    .positive()
+    .max(VERIFICATION_DOCUMENT_MAX_BYTES, "File must be 5 MB or smaller"),
+});
+
+export type RequestDocumentUploadInput = z.infer<typeof RequestDocumentUploadSchema>;
+
+/**
+ * Bank account resolution — asks the configured payout provider (e.g.
+ * Paystack) for the verified account name before saving a payout account.
+ */
+export const ResolvePayoutAccountSchema = z.object({
+  bankCode: z.string().trim().min(1).max(20),
+  accountNumber: BankAccountNumberSchema,
+});
+
+export type ResolvePayoutAccountInput = z.infer<typeof ResolvePayoutAccountSchema>;
+
+/**
+ * Admin review of a business verification submission. Rejections require a
+ * reason so the business knows what to fix.
+ */
+export const ReviewBusinessVerificationSchema = z
+  .object({
+    status: z.enum(["verified", "rejected"]),
+    rejectionReason: z.string().trim().min(1).max(500).optional(),
+  })
+  .refine((v) => v.status !== "rejected" || !!v.rejectionReason, {
+    message: "A rejection reason is required when rejecting",
+    path: ["rejectionReason"],
+  });
+
+export type ReviewBusinessVerificationInput = z.infer<typeof ReviewBusinessVerificationSchema>;

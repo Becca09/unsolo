@@ -6,6 +6,8 @@ export interface AuthenticatedUser {
   sub: string;
   email?: string;
   aud: string;
+  /** Supabase `app_metadata` claim — set server-side only; carries `role`. */
+  appMetadata: Record<string, unknown>;
 }
 
 /**
@@ -67,6 +69,10 @@ export class AuthService {
       sub: payload.sub,
       email: typeof payload.email === "string" ? payload.email : undefined,
       aud: typeof payload.aud === "string" ? payload.aud : "",
+      appMetadata:
+        typeof payload.app_metadata === "object" && payload.app_metadata !== null
+          ? (payload.app_metadata as Record<string, unknown>)
+          : {},
     };
   }
 }

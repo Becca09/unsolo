@@ -1,7 +1,9 @@
 import { Module } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { AuthModule } from "../auth/auth.module";
 import { UsersModule } from "../users/users.module";
 import { DatabaseModule } from "../../infra/database/database.module";
+import { StorageModule } from "../../infra/storage/storage.module";
 import { ProfilesService } from "./application/profiles.service";
 import { ProfilesRepository } from "./infrastructure/profiles.repository";
 import { ProfilesController } from "./presentation/profiles.controller";
@@ -17,6 +19,20 @@ import { AddressesController } from "./presentation/addresses.controller";
 import { PayoutAccountsService } from "./application/payout-accounts.service";
 import { PayoutAccountsRepository } from "./infrastructure/payout-accounts.repository";
 import { PayoutAccountsController } from "./presentation/payout-accounts.controller";
+import { BusinessVerificationsService } from "./application/business-verifications.service";
+import { BusinessVerificationsRepository } from "./infrastructure/business-verifications.repository";
+import { BusinessVerificationsController } from "./presentation/business-verifications.controller";
+import { VerificationDocumentsService } from "./application/verification-documents.service";
+import { VerificationDocumentsRepository } from "./infrastructure/verification-documents.repository";
+import { VerificationDocumentsController } from "./presentation/verification-documents.controller";
+import { PayoutDirectoryService } from "./application/payout-directory.service";
+import { PayoutsController } from "./presentation/payouts.controller";
+import {
+  ManualPayoutProvider,
+  PAYOUT_PROVIDER_RESOLVER,
+  type PayoutProviderResolver,
+} from "./application/payout-provider";
+import { PaystackPayoutProvider } from "./infrastructure/paystack-payout.provider";
 
 /**
  * ProfilesModule — Phase B2.1 profile data model.
@@ -27,7 +43,7 @@ import { PayoutAccountsController } from "./presentation/payout-accounts.control
  * Supabase identity.
  */
 @Module({
-  imports: [AuthModule, UsersModule, DatabaseModule],
+  imports: [AuthModule, UsersModule, DatabaseModule, StorageModule],
   providers: [
     ProfilesService,
     ProfilesRepository,
@@ -39,6 +55,21 @@ import { PayoutAccountsController } from "./presentation/payout-accounts.control
     AddressesRepository,
     PayoutAccountsService,
     PayoutAccountsRepository,
+    BusinessVerificationsService,
+    BusinessVerificationsRepository,
+    VerificationDocumentsService,
+    VerificationDocumentsRepository,
+    PayoutDirectoryService,
+    {
+      provide: PAYOUT_PROVIDER_RESOLVER,
+      inject: [ConfigService],
+      // Paystack resolves Nigerian bank accounts when configured; otherwise
+      // the manual provider keeps account entry working without verification.
+      useFactory: (config: ConfigService): PayoutProviderResolver =>
+        config.get<string>("PAYSTACK_SECRET_KEY")
+          ? new PaystackPayoutProvider(config)
+          : new ManualPayoutProvider(),
+    },
   ],
   controllers: [
     ProfilesController,
@@ -46,6 +77,10 @@ import { PayoutAccountsController } from "./presentation/payout-accounts.control
     InterestsController,
     AddressesController,
     PayoutAccountsController,
+    BusinessVerificationsController,
+    VerificationDocumentsController,
+    PayoutsController,
   ],
+  exports: [ProfilesRepository, BusinessVerificationsRepository, VerificationDocumentsRepository],
 })
 export class ProfilesModule {}

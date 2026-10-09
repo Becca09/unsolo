@@ -1,7 +1,16 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
-import { apiFetch, type Address, type Interest, type Profile, type SocialAccount } from "@/lib/api";
+import {
+  apiFetch,
+  type Address,
+  type BusinessVerification,
+  type Interest,
+  type PayoutAccount,
+  type Profile,
+  type SocialAccount,
+} from "@/lib/api";
 
 interface ProfileCardProps {
   profile: Profile;
@@ -22,6 +31,38 @@ export default function ProfileCard({
   const [bio, setBio] = useState(profile.bio ?? "");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [verification, setVerification] = useState<BusinessVerification | null>(null);
+  const [verificationLoaded, setVerificationLoaded] = useState(false);
+
+  const isBusiness = profile.type === "business";
+
+  async function loadVerification() {
+    try {
+      const data = await apiFetch<BusinessVerification>(`/profiles/${profile.id}/verification`);
+      setVerification(data);
+    } catch {
+      // 404 = no submission yet — a valid state, not an error.
+      setVerification(null);
+    } finally {
+      setVerificationLoaded(true);
+    }
+  }
+
+  useEffect(() => {
+    if (isBusiness) loadVerification();
+  }, [profile.id]);
+
+  const verificationBadge = !isBusiness
+    ? null
+    : !verificationLoaded
+      ? null
+      : verification?.status === "verified"
+        ? { label: "Verified", cls: "bg-unsolo-subtle text-unsolo-accent" }
+        : verification?.status === "pending"
+          ? { label: "Verification pending", cls: "bg-amber-100 text-amber-700" }
+          : verification?.status === "rejected"
+            ? { label: "Verification rejected", cls: "bg-red-100 text-red-700" }
+            : { label: "Not verified", cls: "bg-stone-100 text-stone-500" };
 
   async function updateProfile(e: React.FormEvent) {
     e.preventDefault();
@@ -70,10 +111,19 @@ export default function ProfileCard({
                   Active
                 </span>
               )}
-              {(profile.type === "business" || profile.type === "host") && (
-                <span className="inline-block rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium uppercase text-amber-700">
-                  Not verified
+              {profile.type === "host" && (
+                <span className="inline-block rounded-full bg-stone-100 px-2.5 py-0.5 text-xs font-medium uppercase text-stone-500">
+                  Verification coming soon
                 </span>
+              )}
+              {verificationBadge && (
+                <Link
+                  href="/profile/verification"
+                  title="Manage business verification"
+                  className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium uppercase transition-opacity hover:opacity-80 ${verificationBadge.cls}`}
+                >
+                  {verificationBadge.label}
+                </Link>
               )}
             </div>
             <h2 className="text-unsolo-primary mt-2 text-xl font-bold">{profile.fullName}</h2>
@@ -82,6 +132,14 @@ export default function ProfileCard({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-4">
+          {isBusiness && (
+            <Link
+              href="/profile/verification"
+              className="text-unsolo-accent hover:text-unsolo-moss text-sm font-semibold"
+            >
+              Verification
+            </Link>
+          )}
           {!isActive && onSetActive && (
             <button
               onClick={onSetActive}
@@ -172,7 +230,8 @@ export default function ProfileCard({
           title={profile.type === "business" ? "Location" : "Addresses"}
           onChange={onUpdated}
         />
-        {profile.type !== "traveller" && <PayoutSection />}
+        {profile.type === "host" && <HostVerificationSection />}
+        {profile.type !== "traveller" && <PayoutSection profileId={profile.id} />}
       </div>
     </div>
   );
@@ -187,7 +246,7 @@ function SocialsSection({
   title: string;
   onChange: () => void;
 }) {
-  const [platform, setPlatform] = useState<"instagram" | "x">("instagram");
+  const [platform, setPlatform] = useState<"instagram" | "x" | "tiktok">("instagram");
   const [handle, setHandle] = useState("");
   const [url, setUrl] = useState("");
   const [items, setItems] = useState<SocialAccount[]>([]);
@@ -199,7 +258,7 @@ function SocialsSection({
   }
 
   useEffect(() => {
-    load().catch(() => {});
+    load().catch(() => { });
   }, [profileId]);
 
   async function add(e: React.FormEvent) {
@@ -260,6 +319,7 @@ function SocialsSection({
           >
             <option value="instagram">Instagram</option>
             <option value="x">X</option>
+            <option value="tiktok">TikTok</option>
           </select>
           <input
             value={handle}
@@ -306,7 +366,7 @@ function InterestsSection({
   }
 
   useEffect(() => {
-    load().catch(() => {});
+    load().catch(() => { });
   }, [profileId]);
 
   async function add(e: React.FormEvent) {
@@ -392,7 +452,7 @@ function AddressesSection({
   }
 
   useEffect(() => {
-    load().catch(() => {});
+    load().catch(() => { });
   }, [profileId]);
 
   async function add(e: React.FormEvent) {
@@ -476,22 +536,139 @@ function AddressesSection({
 }
 
 /**
- * Payout management isn't a live feature yet — renders an honest
- * coming-soon box instead of a functional-looking empty form.
+ * Host verification reuses the business verification model — not exposed
+ * for host profiles yet, so this stays an honest placeholder.
  */
-function PayoutSection() {
+function HostVerificationSection() {
   return (
     <div className="border-unsolo-border bg-unsolo-surface/60 rounded-xl border p-4">
       <div className="flex items-center justify-between">
-        <span className="text-unsolo-primary text-sm font-semibold">Payout accounts</span>
+        <span className="text-unsolo-primary text-sm font-semibold">Verification</span>
         <span className="rounded-full bg-stone-100 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-stone-500">
           Coming soon
         </span>
       </div>
       <p className="text-unsolo-muted mt-2 text-sm">
-        Payment and payout management will be available here.
+        Verification will be available here when it opens.
       </p>
     </div>
+  );
+}
+
+/**
+ * Payout accounts — real persistence. Local bank details are stored via
+ * POST /profiles/:id/payout-accounts; responses only ever carry the masked
+ * account number.
+ */
+function PayoutSection({ profileId }: { profileId: string }) {
+  const [items, setItems] = useState<PayoutAccount[]>([]);
+  const [form, setForm] = useState({ bankName: "", accountNumber: "", accountName: "" });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function load() {
+    const data = await apiFetch<PayoutAccount[]>(`/profiles/${profileId}/payout-accounts`);
+    setItems(data);
+  }
+
+  useEffect(() => {
+    load().catch(() => { });
+  }, [profileId]);
+
+  async function add(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    try {
+      await apiFetch(`/profiles/${profileId}/payout-accounts`, {
+        method: "POST",
+        body: JSON.stringify({
+          provider: "local",
+          bankName: form.bankName.trim(),
+          accountNumber: form.accountNumber.trim(),
+          accountName: form.accountName.trim(),
+        }),
+      });
+      setForm({ bankName: "", accountNumber: "", accountName: "" });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not add payout account.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function remove(id: string) {
+    await apiFetch(`/profiles/${profileId}/payout-accounts/${id}`, { method: "DELETE" });
+    await load();
+  }
+
+  return (
+    <ResourceBox title="Payout accounts" count={items.length}>
+      {items.length > 0 && (
+        <ul className="mb-4 space-y-2">
+          {items.map((a) => (
+            <li
+              key={a.id}
+              className="bg-unsolo-light text-unsolo-primary flex items-center justify-between rounded-lg px-3 py-2 text-sm"
+            >
+              <span>
+                {a.bankName ?? a.provider}
+                {a.accountNumberMasked ? ` · ${a.accountNumberMasked}` : ""}
+                {a.accountName ? ` — ${a.accountName}` : ""}
+              </span>
+              <button onClick={() => remove(a.id)} className="text-xs text-red-600 hover:underline">
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form onSubmit={add} className="space-y-2">
+        <input
+          value={form.bankName}
+          onChange={(e) => setForm((f) => ({ ...f, bankName: e.target.value }))}
+          placeholder="Bank name"
+          required
+          maxLength={120}
+          className="border-unsolo-border bg-unsolo-surface text-unsolo-primary w-full rounded-lg border px-3 py-2 text-sm outline-none"
+        />
+        <input
+          value={form.accountNumber}
+          onChange={(e) =>
+            setForm((f) => ({ ...f, accountNumber: e.target.value.replace(/\D/g, "") }))
+          }
+          placeholder="Account number (10 digits)"
+          required
+          inputMode="numeric"
+          maxLength={10}
+          pattern="\d{10}"
+          title="10-digit NUBAN account number"
+          className="border-unsolo-border bg-unsolo-surface text-unsolo-primary w-full rounded-lg border px-3 py-2 text-sm outline-none"
+        />
+        <input
+          value={form.accountName}
+          onChange={(e) => setForm((f) => ({ ...f, accountName: e.target.value }))}
+          placeholder="Account name"
+          required
+          maxLength={120}
+          className="border-unsolo-border bg-unsolo-surface text-unsolo-primary w-full rounded-lg border px-3 py-2 text-sm outline-none"
+        />
+        {error && <p className="rounded-lg bg-red-50 p-2 text-xs text-red-700">{error}</p>}
+        <button
+          type="submit"
+          disabled={
+            loading ||
+            !form.bankName.trim() ||
+            form.accountNumber.trim().length !== 10 ||
+            !form.accountName.trim()
+          }
+          className="bg-unsolo-primary text-unsolo-neutral w-full rounded-lg py-2 text-sm font-semibold transition-opacity hover:opacity-90 disabled:opacity-60"
+        >
+          {loading ? "Adding..." : "Add payout account"}
+        </button>
+      </form>
+    </ResourceBox>
   );
 }
 

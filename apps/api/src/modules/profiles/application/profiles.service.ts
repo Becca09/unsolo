@@ -1,6 +1,10 @@
 import { ConflictException, Injectable, NotFoundException } from "@nestjs/common";
-import type { Profile } from "@unsolo/database";
-import type { CreateProfileInput, UpdateProfileInput } from "@unsolo/validation";
+import type { BusinessProfile, Profile } from "@unsolo/database";
+import type {
+  CreateProfileInput,
+  UpdateBusinessProfileInput,
+  UpdateProfileInput,
+} from "@unsolo/validation";
 import { UsersService } from "../../users/application/users.service";
 import { ProfilesRepository } from "../infrastructure/profiles.repository";
 
@@ -61,6 +65,41 @@ export class ProfilesService {
     } catch (error) {
       throw mapUniqueViolation(error, profile.type);
     }
+  }
+
+  /**
+   * Business-specific fields (tagline, phone) live on `business_profiles`.
+   * A non-business or foreign profile is indistinguishable from a missing
+   * one (404), so existence is never leaked across users.
+   */
+  async getBusinessDetails(authUserId: string, profileId: string): Promise<BusinessProfile> {
+    await this.requireOwnedBusinessProfile(authUserId, profileId);
+    const details = await this.profiles.findBusinessProfile(profileId);
+    if (!details) {
+      throw new NotFoundException("Profile not found");
+    }
+    return details;
+  }
+
+  async updateBusinessDetails(
+    authUserId: string,
+    profileId: string,
+    input: UpdateBusinessProfileInput,
+  ): Promise<BusinessProfile> {
+    await this.requireOwnedBusinessProfile(authUserId, profileId);
+    const updated = await this.profiles.updateBusinessProfile(profileId, input);
+    if (!updated) {
+      throw new NotFoundException("Profile not found");
+    }
+    return updated;
+  }
+
+  private async requireOwnedBusinessProfile(authUserId: string, profileId: string) {
+    const profile = await this.profiles.findById(profileId);
+    if (!profile || profile.userId !== authUserId || profile.type !== "business") {
+      throw new NotFoundException("Profile not found");
+    }
+    return profile;
   }
 }
 

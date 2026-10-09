@@ -1,21 +1,31 @@
-import { ConflictException, Injectable, NotFoundException } from "@nestjs/common";
+import { ConflictException, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import type { PayoutAccount } from "@unsolo/database";
 import type { CreatePayoutAccountInput, UpdatePayoutAccountInput } from "@unsolo/validation";
 import { ProfilesRepository } from "../infrastructure/profiles.repository";
 import { PayoutAccountsRepository } from "../infrastructure/payout-accounts.repository";
+import { PAYOUT_PROVIDER_RESOLVER, type PayoutProviderResolver } from "./payout-provider";
 
 /**
- * Public shape returned by the API. `providerAccountId` is deliberately
- * excluded — it is an external reference needed only server-side, and the
- * spec requires sensitive values to not be returned unnecessarily.
+ * Public shape returned by the API. `providerAccountId` and the raw
+ * `accountNumber` are deliberately excluded — external references and bank
+ * details are never returned; the account number is exposed only as a
+ * last-4 mask.
  */
 export interface PublicPayoutAccount {
   id: string;
   profileId: string;
   provider: PayoutAccount["provider"];
+  bankName: string | null;
+  bankCode: string | null;
+  accountName: string | null;
+  accountNumberMasked: string | null;
   displayLabel: string | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+function maskLast4(value: string): string {
+  return `••••${value.slice(-4)}`;
 }
 
 function toPublic(account: PayoutAccount): PublicPayoutAccount {
@@ -23,6 +33,10 @@ function toPublic(account: PayoutAccount): PublicPayoutAccount {
     id: account.id,
     profileId: account.profileId,
     provider: account.provider,
+    bankName: account.bankName,
+    bankCode: account.bankCode,
+    accountName: account.accountName,
+    accountNumberMasked: account.accountNumber ? maskLast4(account.accountNumber) : null,
     displayLabel: account.displayLabel,
     createdAt: account.createdAt,
     updatedAt: account.updatedAt,
@@ -45,6 +59,8 @@ export class PayoutAccountsService {
   constructor(
     private readonly profiles: ProfilesRepository,
     private readonly payoutAccounts: PayoutAccountsRepository,
+    @Inject(PAYOUT_PROVIDER_RESOLVER)
+    private readonly payoutProvider: PayoutProviderResolver,
   ) {}
 
   async list(authUserId: string, profileId: string): Promise<PublicPayoutAccount[]> {
@@ -60,12 +76,36 @@ export class PayoutAccountsService {
   ): Promise<PublicPayoutAccount> {
     await this.requireOwnedProfile(authUserId, profileId);
 
+    // `local` accounts carry bank details collected at onboarding. The
+    // resolver is the provider seam: it may confirm the account name and
+    // produce the external provider reference (e.g. a recipient id). With
+    // the manual provider it resolves nothing — the user-entered account
+    // name is stored and providerAccountId stays null.
+    let resolved: { accountName?: string; providerAccountId?: string } = {};
+    if (input.provider === "local") {
+      resolved = await this.payoutProvider.resolveBankAccount(
+        { bankName: input.bankName, bankCode: input.bankCode },
+        input.accountNumber,
+      );
+    }
+
     try {
       const account = await this.payoutAccounts.create({
         profileId,
         provider: input.provider,
-        providerAccountId: input.providerAccountId,
-        displayLabel: input.displayLabel,
+        providerAccountId:
+          resolved.providerAccountId ??
+          (input.provider === "stripe" ? input.providerAccountId : null),
+        bankName: input.provider === "local" ? input.bankName : undefined,
+        bankCode: input.provider === "local" ? input.bankCode : undefined,
+        accountNumber: input.provider === "local" ? input.accountNumber : undefined,
+        accountName:
+          input.provider === "local" ? (resolved.accountName ?? input.accountName) : undefined,
+        displayLabel:
+          input.displayLabel ??
+          (input.provider === "local"
+            ? `${input.bankName} ${maskLast4(input.accountNumber)}`
+            : undefined),
       });
       return toPublic(account);
     } catch (error) {

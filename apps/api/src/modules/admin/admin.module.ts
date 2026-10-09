@@ -1,19 +1,22 @@
 import { Module } from "@nestjs/common";
+import { AuthModule } from "../auth/auth.module";
+import { ProfilesModule } from "../profiles/profiles.module";
+import { StorageModule } from "../../infra/storage/storage.module";
+import { AdminVerificationsService } from "./application/admin-verifications.service";
+import { AdminVerificationsController } from "./presentation/admin-verifications.controller";
 
 /**
- * AdminModule — architectural skeleton (Phase A — Foundation).
+ * AdminModule — admin review surface.
  *
- * This module intentionally has no controllers, providers, or business
- * logic yet. Its purpose in this phase is only to establish the domain
- * boundary and layering convention that will be filled in during the
- * implementation phase for this domain:
- *
- *   presentation/    -> controllers, request/response DTOs, module-specific guards
- *   application/     -> use-cases/services (orchestration, domain rules)
- *   domain/          -> entities, value objects, state machines
- *   infrastructure/  -> Drizzle repositories, external integration adapters
- *
- * See docs/architecture-proposal.md for the full module boundary rationale.
+ * Currently exposes the business verification review queue
+ * (/admin/verifications). Routes are protected by AuthGuard + AdminGuard:
+ * a valid Supabase JWT whose `app_metadata.role` is "admin". Admin roles
+ * are provisioned manually via Supabase (app_metadata) until the admin
+ * domain model lands — see common/guards/admin.guard.ts.
  */
-@Module({})
+@Module({
+  imports: [AuthModule, ProfilesModule, StorageModule],
+  providers: [AdminVerificationsService],
+  controllers: [AdminVerificationsController],
+})
 export class AdminModule {}

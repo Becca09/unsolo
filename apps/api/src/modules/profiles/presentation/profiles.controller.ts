@@ -12,8 +12,10 @@ import {
 import type { Request as ExpressRequest } from "express";
 import {
   CreateProfileSchema,
+  UpdateBusinessProfileSchema,
   UpdateProfileSchema,
   type CreateProfileInput,
+  type UpdateBusinessProfileInput,
   type UpdateProfileInput,
 } from "@unsolo/validation";
 import { AuthGuard } from "../../auth/presentation/auth.guard";
@@ -56,5 +58,19 @@ export class ProfilesController {
     @Body(new ZodValidationPipe(UpdateProfileSchema)) body: UpdateProfileInput,
   ) {
     return this.profilesService.update(req.user.sub, id, body);
+  }
+
+  @Get(":id/business")
+  getBusinessDetails(@Request() req: RequestWithUser, @Param("id", ParseUUIDPipe) id: string) {
+    return this.profilesService.getBusinessDetails(req.user.sub, id);
+  }
+
+  @Patch(":id/business")
+  updateBusinessDetails(
+    @Request() req: RequestWithUser,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(UpdateBusinessProfileSchema)) body: UpdateBusinessProfileInput,
+  ) {
+    return this.profilesService.updateBusinessDetails(req.user.sub, id, body);
   }
 }

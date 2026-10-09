@@ -103,11 +103,10 @@ export function AppShell({ profiles, email, children }: AppShellProps) {
               key={item.href}
               href={item.href}
               onClick={() => setMobileOpen(false)}
-              className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
-                active
+              className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${active
                   ? "bg-unsolo-subtle text-unsolo-primary"
                   : "text-unsolo-muted hover:bg-unsolo-subtle hover:text-unsolo-primary"
-              }`}
+                }`}
             >
               <svg
                 className="h-5 w-5 shrink-0"

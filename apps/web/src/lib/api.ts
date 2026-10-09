@@ -63,7 +63,7 @@ export interface Profile {
 export interface SocialAccount {
   id: string;
   profileId: string;
-  platform: "instagram" | "x";
+  platform: "instagram" | "x" | "tiktok";
   handle: string | null;
   url: string | null;
   createdAt: string;
@@ -92,7 +92,54 @@ export interface PayoutAccount {
   id: string;
   profileId: string;
   provider: "stripe" | "local";
+  bankName: string | null;
+  bankCode: string | null;
+  accountName: string | null;
+  accountNumberMasked: string | null;
   displayLabel: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface VerificationDocument {
+  id: string;
+  verificationId: string;
+  type: "government_id" | "cac_certificate" | "other";
+  status: "pending_upload" | "uploaded" | "approved" | "rejected";
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  viewUrl?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BusinessDetails {
+  id: string;
+  profileId: string;
+  tagline: string | null;
+  phone: string | null;
+  approvedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BusinessVerification {
+  id: string;
+  profileId: string;
+  legalName: string;
+  ninMasked: string;
+  bvnMasked: string | null;
+  phone: string;
+  country: string;
+  state: string;
+  city: string;
+  lga: string;
+  street: string;
+  status: "pending" | "verified" | "rejected";
+  rejectionReason: string | null;
+  submittedAt: string;
+  reviewedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }

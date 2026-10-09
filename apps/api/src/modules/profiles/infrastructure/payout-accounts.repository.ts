@@ -6,12 +6,20 @@ import { DatabaseService } from "../../../infra/database/database.service";
 export interface CreatePayoutAccountRecord {
   profileId: string;
   provider: PayoutProvider;
-  providerAccountId: string;
+  providerAccountId?: string | null;
+  bankName?: string;
+  bankCode?: string;
+  accountNumber?: string;
+  accountName?: string;
   displayLabel?: string;
 }
 
 export interface UpdatePayoutAccountRecord {
-  providerAccountId?: string;
+  providerAccountId?: string | null;
+  bankName?: string;
+  bankCode?: string;
+  accountNumber?: string;
+  accountName?: string;
   displayLabel?: string;
 }
 
@@ -50,7 +58,11 @@ export class PayoutAccountsRepository {
       .values({
         profileId: data.profileId,
         provider: data.provider,
-        providerAccountId: data.providerAccountId,
+        providerAccountId: data.providerAccountId ?? null,
+        bankName: data.bankName,
+        bankCode: data.bankCode,
+        accountNumber: data.accountNumber,
+        accountName: data.accountName,
         displayLabel: data.displayLabel,
       })
       .returning();

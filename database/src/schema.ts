@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
   check,
   index,
+  integer,
   pgEnum,
   pgTable,
   primaryKey,
@@ -126,10 +127,102 @@ export const businessProfiles = pgTable(
       .notNull()
       .unique()
       .references(() => profiles.id, { onDelete: "cascade" }),
+    tagline: text("tagline"),
+    phone: text("phone"),
     approvedAt: timestamp("approved_at", { withTimezone: true }),
     ...timestamps,
   },
   (table) => [index("business_profiles_profile_id_idx").on(table.profileId)],
+);
+
+export const businessVerificationStatusEnum = pgEnum("business_verification_status", [
+  "pending",
+  "verified",
+  "rejected",
+]);
+
+/**
+ * Business verification submissions — Phase B2.6.
+ *
+ * One submission per business profile. Stores the identity data needed for
+ * a reviewer (later admin phase) to verify the business: the legal name of
+ * the owner/representative, Nigerian identity numbers (NIN always, BVN when
+ * required), a contact phone and a residential/business address.
+ *
+ * SENSITIVE: `nin` and `bvn` must never be logged or returned by the API —
+ * read paths return masked forms (last-4) only. Document upload support is
+ * intentionally not modelled yet; this table's row lifecycle (pending →
+ * verified/rejected) leaves room for it.
+ */
+export const businessVerifications = pgTable(
+  "business_verifications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    profileId: uuid("profile_id")
+      .notNull()
+      .unique()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    legalName: text("legal_name").notNull(),
+    nin: text("nin").notNull(),
+    bvn: text("bvn"),
+    phone: text("phone").notNull(),
+    country: text("country").notNull(),
+    state: text("state").notNull(),
+    city: text("city").notNull(),
+    lga: text("lga").notNull(),
+    street: text("street").notNull(),
+    status: businessVerificationStatusEnum("status").notNull().default("pending"),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }).notNull().defaultNow(),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    reviewedBy: uuid("reviewed_by"),
+    rejectionReason: text("rejection_reason"),
+    ...timestamps,
+  },
+  (table) => [index("business_verifications_profile_id_idx").on(table.profileId)],
+);
+
+export const verificationDocumentTypeEnum = pgEnum("verification_document_type", [
+  "government_id",
+  "cac_certificate",
+  "other",
+]);
+
+export const verificationDocumentStatusEnum = pgEnum("verification_document_status", [
+  "pending_upload",
+  "uploaded",
+  "approved",
+  "rejected",
+]);
+
+/**
+ * Verification documents — supporting files attached to a business
+ * verification submission (government-issued ID, CAC certificate where
+ * applicable, other supporting evidence).
+ *
+ * SENSITIVE (manuscript §11): files live in the private `verification-documents`
+ * Supabase Storage bucket and are reachable only through short-lived signed
+ * URLs issued by the API after an ownership/admin check — never via public
+ * URLs. `storage_path` is an opaque object key, not a URL. Rows are created
+ * with `pending_upload` when the API issues a signed upload URL and flip to
+ * `uploaded` on client confirmation; `approved`/`rejected` are set by the
+ * admin review flow.
+ */
+export const verificationDocuments = pgTable(
+  "verification_documents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    verificationId: uuid("verification_id")
+      .notNull()
+      .references(() => businessVerifications.id, { onDelete: "cascade" }),
+    type: verificationDocumentTypeEnum("type").notNull(),
+    status: verificationDocumentStatusEnum("status").notNull().default("pending_upload"),
+    fileName: text("file_name").notNull(),
+    mimeType: text("mime_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    storagePath: text("storage_path").notNull().unique(),
+    ...timestamps,
+  },
+  (table) => [index("verification_documents_verification_id_idx").on(table.verificationId)],
 );
 
 /**
@@ -152,7 +245,7 @@ export const hostProfiles = pgTable(
   (table) => [index("host_profiles_profile_id_idx").on(table.profileId)],
 );
 
-export const socialPlatformEnum = pgEnum("social_platform", ["instagram", "x"]);
+export const socialPlatformEnum = pgEnum("social_platform", ["instagram", "x", "tiktok"]);
 
 /**
  * Social accounts — Phase B2.2.
@@ -254,16 +347,18 @@ export const payoutProviderEnum = pgEnum("payout_provider", ["stripe", "local"])
 /**
  * Payout accounts — Phase B2.5.
  *
- * Provider-agnostic payout destination references for provider profiles
- * (planner/business/host receive payouts per the spec). Stores ONLY the
- * minimum non-sensitive data needed to reference and display a payout
- * destination:
+ * Provider-agnostic payout destinations for provider profiles
+ * (planner/business/host receive payouts per the spec):
  *   - `provider` — which payment provider the destination lives at
  *     (Stripe international / local Nigerian provider, per the spec's
  *     payment abstraction).
  *   - `provider_account_id` — the external provider's account/customer ID
- *     or token (e.g. a Stripe Connect account id). NEVER raw bank details,
- *     card numbers, CVVs, or credentials.
+ *     or token (e.g. a Stripe Connect account id). NULL for `local` bank
+ *     payouts until a provider connection assigns one.
+ *   - `bank_name` / `account_number` / `account_name` — local bank payout
+ *     details collected at onboarding. SENSITIVE: `account_number` is never
+ *     returned by the API — read paths return the last-4 mask only. Card
+ *     numbers, CVVs and credentials are never stored.
  *   - `display_label` — optional non-sensitive display string (e.g. a bank
  *     name or masked reference) so the UI can show the destination.
  *
@@ -278,7 +373,11 @@ export const payoutAccounts = pgTable(
       .notNull()
       .references(() => profiles.id, { onDelete: "cascade" }),
     provider: payoutProviderEnum("provider").notNull(),
-    providerAccountId: text("provider_account_id").notNull(),
+    providerAccountId: text("provider_account_id"),
+    bankName: text("bank_name"),
+    bankCode: text("bank_code"),
+    accountNumber: text("account_number"),
+    accountName: text("account_name"),
     displayLabel: text("display_label"),
     ...timestamps,
   },
@@ -308,3 +407,11 @@ export type NewAddress = typeof addresses.$inferInsert;
 export type PayoutAccount = typeof payoutAccounts.$inferSelect;
 export type NewPayoutAccount = typeof payoutAccounts.$inferInsert;
 export type PayoutProvider = (typeof payoutProviderEnum.enumValues)[number];
+export type BusinessProfile = typeof businessProfiles.$inferSelect;
+export type BusinessVerification = typeof businessVerifications.$inferSelect;
+export type NewBusinessVerification = typeof businessVerifications.$inferInsert;
+export type BusinessVerificationStatus = (typeof businessVerificationStatusEnum.enumValues)[number];
+export type VerificationDocument = typeof verificationDocuments.$inferSelect;
+export type NewVerificationDocument = typeof verificationDocuments.$inferInsert;
+export type VerificationDocumentType = (typeof verificationDocumentTypeEnum.enumValues)[number];
+export type VerificationDocumentStatus = (typeof verificationDocumentStatusEnum.enumValues)[number];

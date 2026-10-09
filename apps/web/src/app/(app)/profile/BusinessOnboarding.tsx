@@ -1,13 +1,30 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { apiFetch } from "@/lib/api";
+import DetailsStep from "./business/DetailsStep";
+import PayoutStep from "./business/PayoutStep";
+import ReviewStep, { type ReviewSection } from "./business/ReviewStep";
+import SuccessStep from "./business/SuccessStep";
+import VerificationStep from "./business/VerificationStep";
+import {
+  type BusinessDraft,
+  type DetailErrors,
+  emptyDraft,
+  filledSocials,
+  isAddressComplete,
+} from "./business/types";
 
-const inputCls =
-  "border-unsolo-border bg-unsolo-surface text-unsolo-primary focus:border-unsolo-accent focus:ring-unsolo-accent mt-1 w-full rounded-xl border px-4 py-3 text-sm outline-none transition focus:ring-1";
+const FLOW_STEPS = [
+  { key: "details", label: "Business details" },
+  { key: "verification", label: "Verification" },
+  { key: "payout", label: "Payout" },
+  { key: "review", label: "Review" },
+] as const;
 
-const STEPS = ["Basics", "Presence", "Profile", "Verification", "Review"] as const;
-type Step = (typeof STEPS)[number] | "created";
+type StepKey = (typeof FLOW_STEPS)[number]["key"];
+type Step = StepKey | "success";
 
 interface Props {
   onBack: () => void;
@@ -15,60 +32,124 @@ interface Props {
 }
 
 /**
- * Business profile onboarding — a dedicated flow, deliberately distinct from
- * the traveller/planner/host wizard. Submits only fields the B2 API supports
- * (profile: username/fullName/bio; sub-resources: interests → categories,
- * socials, addresses). Website, logo upload and verification documents are
- * UI placeholders until their phases land.
+ * Business profile onboarding — a dedicated multi-step flow, deliberately
+ * distinct from the traveller/planner/host wizard.
+ *
+ * Steps live under ./business/. Submission happens once, on "Complete
+ * setup" in review, and persists in order: profile → business details →
+ * verification submission → payout account, then best-effort extras
+ * (categories, socials, address). Server failures route the user back to
+ * the step that owns the bad data.
  */
 export default function BusinessOnboarding({ onBack, onCreated }: Props) {
-  const [step, setStep] = useState<Step>("Basics");
-  const [businessName, setBusinessName] = useState("");
-  const [handle, setHandle] = useState("");
-  const [description, setDescription] = useState("");
-  const [categoryInput, setCategoryInput] = useState("");
-  const [categories, setCategories] = useState<string[]>([]);
-  const [socials, setSocials] = useState([
-    { platform: "instagram" as const, handle: "" },
-    { platform: "x" as const, handle: "" },
-  ]);
-  const [address, setAddress] = useState({ country: "", state: "", city: "", street: "" });
+  const router = useRouter();
+  const [step, setStep] = useState<Step>("details");
+  const [draft, setDraft] = useState<BusinessDraft>(emptyDraft);
+  const [serverErrors, setServerErrors] = useState<DetailErrors>({});
+  const [stepErrors, setStepErrors] = useState<Partial<Record<StepKey, string>>>({});
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [createdProfileId, setCreatedProfileId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
-  const stepIndex = STEPS.indexOf(step as (typeof STEPS)[number]);
-  const addressComplete = Object.values(address).every((v) => v.trim());
-  const addressPartial = !addressComplete && Object.values(address).some((v) => v.trim());
-  const handleValid = /^[a-z0-9_]{3,30}$/.test(handle.trim());
-  const basicsValid = businessName.trim() && handleValid;
-  const filledSocials = socials.filter((s) => s.handle.trim());
+  const stepIndex = step === "success" ? -1 : FLOW_STEPS.findIndex((s) => s.key === step);
 
-  function addCategory() {
-    const name = categoryInput.trim();
-    if (name && !categories.some((c) => c.toLowerCase() === name.toLowerCase())) {
-      setCategories((prev) => [...prev, name]);
+  function patchDraft(patch: Partial<BusinessDraft>) {
+    setDraft((d) => ({ ...d, ...patch }));
+  }
+
+  function goBack() {
+    const prev = FLOW_STEPS[stepIndex - 1];
+    if (!prev) {
+      onBack();
+    } else {
+      setStep(prev.key);
     }
-    setCategoryInput("");
   }
 
   async function create() {
     setLoading(true);
-    setError(null);
+    setSubmitError(null);
+    setStepErrors({});
     try {
       const body: Record<string, string> = {
         type: "business",
-        username: handle.trim().toLowerCase(),
-        fullName: businessName.trim(),
+        username: draft.handle.trim().toLowerCase(),
+        fullName: draft.businessName.trim(),
       };
-      if (description.trim()) body.bio = description.trim();
+      if (draft.description.trim()) body.bio = draft.description.trim();
+      if (draft.logoUrl.trim()) body.avatarUrl = draft.logoUrl.trim();
 
       const profile = await apiFetch<{ id: string }>("/profiles", {
         method: "POST",
         body: JSON.stringify(body),
       });
 
+      // Business details extension (tagline, phone) — only send if present.
+      const businessBody: Record<string, string> = {};
+      if (draft.tagline.trim()) businessBody.tagline = draft.tagline.trim();
+      if (draft.phone.trim()) businessBody.phone = draft.phone.trim();
+      if (Object.keys(businessBody).length > 0) {
+        await apiFetch(`/profiles/${profile.id}/business`, {
+          method: "PATCH",
+          body: JSON.stringify(businessBody),
+        });
+      }
+
+      // Verification submission — required by the flow.
+      const v = draft.verification;
+      try {
+        await apiFetch(`/profiles/${profile.id}/verification`, {
+          method: "POST",
+          body: JSON.stringify({
+            legalName: v.legalName.trim(),
+            nin: v.nin.trim(),
+            ...(v.bvn.trim() ? { bvn: v.bvn.trim() } : {}),
+            phone: v.phone.trim(),
+            country: v.country.trim(),
+            state: v.state.trim(),
+            city: v.city.trim(),
+            lga: v.lga.trim(),
+            street: v.street.trim(),
+          }),
+        });
+      } catch (err) {
+        setStepErrors({
+          verification:
+            err instanceof Error
+              ? err.message
+              : "Verification submission failed. Check the details.",
+        });
+        setStep("verification");
+        return;
+      }
+
+      // Payout account — local bank details (bankCode from the directory
+      // when a provider resolved it).
+      const p = draft.payout;
+      try {
+        await apiFetch(`/profiles/${profile.id}/payout-accounts`, {
+          method: "POST",
+          body: JSON.stringify({
+            provider: "local",
+            bankName: p.bankName.trim(),
+            ...(p.bankCode ? { bankCode: p.bankCode } : {}),
+            accountNumber: p.accountNumber.trim(),
+            accountName: p.accountName.trim(),
+          }),
+        });
+      } catch (err) {
+        setStepErrors({
+          payout:
+            err instanceof Error ? err.message : "Payout setup failed. Check the account details.",
+        });
+        setStep("payout");
+        return;
+      }
+
+      // Sub-resources exist per-profile — attach what the user provided.
+      // These are best-effort: the profile itself is already created.
       const extras: Promise<unknown>[] = [];
-      for (const name of categories) {
+      for (const name of draft.categories) {
         extras.push(
           apiFetch(`/profiles/${profile.id}/interests`, {
             method: "POST",
@@ -76,46 +157,58 @@ export default function BusinessOnboarding({ onBack, onCreated }: Props) {
           }).catch(() => {}),
         );
       }
-      for (const s of filledSocials) {
+      for (const s of filledSocials(draft.socials)) {
         extras.push(
           apiFetch(`/profiles/${profile.id}/socials`, {
             method: "POST",
-            body: JSON.stringify({ platform: s.platform, handle: s.handle.trim() }),
+            body: JSON.stringify({ platform: s.platform, handle: s.handle }),
           }).catch(() => {}),
         );
       }
-      if (addressComplete) {
+      if (isAddressComplete(draft.address)) {
         extras.push(
           apiFetch(`/profiles/${profile.id}/addresses`, {
             method: "POST",
             body: JSON.stringify({
-              country: address.country.trim(),
-              state: address.state.trim(),
-              city: address.city.trim(),
-              street: address.street.trim(),
+              country: draft.address.country.trim(),
+              state: draft.address.state.trim(),
+              city: draft.address.city.trim(),
+              street: draft.address.street.trim(),
             }),
           }).catch(() => {}),
         );
       }
       await Promise.all(extras);
-      setStep("created");
+      setCreatedProfileId(profile.id);
+      setStep("success");
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Could not create business profile. Please try again.",
-      );
+      const message =
+        err instanceof Error ? err.message : "Could not create business profile. Please try again.";
+      // A taken handle belongs to step 1 — send the user back to fix it.
+      if (/username|taken/i.test(message)) {
+        setServerErrors({ handle: "This handle is already taken. Try another one." });
+        setStep("details");
+      } else {
+        setSubmitError(message);
+      }
     } finally {
       setLoading(false);
     }
   }
 
+  function finish() {
+    onCreated();
+    router.push("/dashboard");
+  }
+
   return (
     <div className="card p-6 sm:p-10">
-      {/* Step indicator */}
-      {step !== "created" && (
+      {/* Progress indicator */}
+      {step !== "success" && (
         <div className="mb-10">
           <div className="flex items-center justify-between">
-            {STEPS.map((s, i) => (
-              <div key={s} className="flex flex-1 items-center last:flex-none">
+            {FLOW_STEPS.map((s, i) => (
+              <div key={s.key} className="flex flex-1 items-center last:flex-none">
                 <div className="flex flex-col items-center">
                   <div
                     className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold ${
@@ -133,12 +226,12 @@ export default function BusinessOnboarding({ onBack, onCreated }: Props) {
                       i <= stepIndex ? "text-unsolo-primary" : "text-unsolo-muted"
                     }`}
                   >
-                    {s}
+                    {s.label}
                   </span>
                 </div>
-                {i < STEPS.length - 1 && (
+                {i < FLOW_STEPS.length - 1 && (
                   <div
-                    className={`mx-2 mb-5 h-px flex-1 sm:mb-5 ${
+                    className={`mx-2 mb-0 h-px flex-1 sm:mb-5 ${
                       i < stepIndex ? "bg-unsolo-accent" : "bg-unsolo-border"
                     }`}
                   />
@@ -146,498 +239,59 @@ export default function BusinessOnboarding({ onBack, onCreated }: Props) {
               </div>
             ))}
           </div>
-        </div>
-      )}
-
-      {/* Step 1 — Business basics */}
-      {step === "Basics" && (
-        <div>
-          <h2 className="text-unsolo-primary text-2xl font-bold">Business basics</h2>
-          <p className="text-unsolo-muted mt-2 text-sm">
-            The core identity travellers will see for your business.
+          <p className="text-unsolo-muted mt-3 text-xs font-medium sm:hidden">
+            Step {stepIndex + 1} of {FLOW_STEPS.length} — {FLOW_STEPS[stepIndex]?.label}
           </p>
-          <div className="mt-8 space-y-5">
-            <div>
-              <label className="text-unsolo-primary block text-sm font-medium">Business name</label>
-              <input
-                value={businessName}
-                onChange={(e) => setBusinessName(e.target.value)}
-                maxLength={120}
-                placeholder="e.g. Atmosphere Travels"
-                className={inputCls}
-              />
-            </div>
-            <div>
-              <label className="text-unsolo-primary block text-sm font-medium">
-                Business handle
-              </label>
-              <input
-                value={handle}
-                onChange={(e) => setHandle(e.target.value.toLowerCase())}
-                minLength={3}
-                maxLength={30}
-                pattern="[a-z0-9_]+"
-                title="3–30 characters: lowercase letters, numbers and underscores only"
-                placeholder="e.g. atmosphere_travels"
-                className={inputCls}
-              />
-              <p className="text-unsolo-muted mt-1 text-xs">
-                Your unique @handle — used in your business&apos;s profile URL. 3–30 characters:
-                lowercase letters, numbers and underscores only.
-              </p>
-            </div>
-            <div>
-              <label className="text-unsolo-primary block text-sm font-medium">
-                Business description
-              </label>
-              <textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                maxLength={2000}
-                rows={3}
-                placeholder="What does your business offer travellers?"
-                className={inputCls}
-              />
-            </div>
-            <div>
-              <label className="text-unsolo-primary block text-sm font-medium">
-                Business categories
-              </label>
-              <div className="mt-1 flex gap-2">
-                <input
-                  value={categoryInput}
-                  onChange={(e) => setCategoryInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      addCategory();
-                    }
-                  }}
-                  placeholder="e.g. tours, hotels, rentals"
-                  maxLength={60}
-                  className="border-unsolo-border bg-unsolo-surface text-unsolo-primary flex-1 rounded-xl border px-4 py-3 text-sm outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={addCategory}
-                  disabled={!categoryInput.trim()}
-                  className="border-unsolo-border text-unsolo-primary hover:bg-unsolo-subtle rounded-xl border px-5 py-2.5 text-sm font-semibold transition disabled:opacity-50"
-                >
-                  Add
-                </button>
-              </div>
-              {categories.length > 0 && (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {categories.map((c) => (
-                    <span
-                      key={c}
-                      className="bg-unsolo-subtle text-unsolo-primary inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium"
-                    >
-                      {c}
-                      <button
-                        type="button"
-                        onClick={() => setCategories((p) => p.filter((x) => x !== c))}
-                        className="text-unsolo-muted hover:text-red-600"
-                      >
-                        ×
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-          <div className="mt-10 flex items-center justify-between">
-            <button
-              type="button"
-              onClick={onBack}
-              className="text-unsolo-muted hover:text-unsolo-primary text-sm font-medium"
-            >
-              Back
-            </button>
-            <button
-              onClick={() => setStep("Presence")}
-              disabled={!basicsValid}
-              className="bg-unsolo-accent rounded-full px-8 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-            >
-              Continue
-            </button>
-          </div>
         </div>
       )}
 
-      {/* Step 2 — Business presence */}
-      {step === "Presence" && (
-        <div>
-          <h2 className="text-unsolo-primary text-2xl font-bold">Business presence</h2>
-          <p className="text-unsolo-muted mt-2 text-sm">
-            Where travellers can find your business online and in the world.
-          </p>
-          <div className="mt-8 space-y-6">
-            <div>
-              <label className="text-unsolo-primary block text-sm font-medium">
-                Business website
-              </label>
-              <input
-                disabled
-                placeholder="Coming soon"
-                className="border-unsolo-border bg-unsolo-subtle text-unsolo-muted mt-1 w-full cursor-not-allowed rounded-xl border px-4 py-3 text-sm outline-none"
-              />
-              <p className="text-unsolo-muted mt-1 text-xs">
-                Website links will be supported in a later phase.
-              </p>
-            </div>
-            <div>
-              <label className="text-unsolo-primary block text-sm font-medium">
-                Social accounts
-              </label>
-              <div className="mt-2 space-y-3">
-                {socials.map((s, idx) => (
-                  <div key={s.platform} className="flex items-center gap-2">
-                    <span className="text-unsolo-muted w-24 rounded-full bg-stone-100 px-2.5 py-1.5 text-center text-xs font-medium uppercase">
-                      {s.platform === "x" ? "X" : "Instagram"}
-                    </span>
-                    <input
-                      value={s.handle}
-                      onChange={(e) =>
-                        setSocials((prev) =>
-                          prev.map((p, i) => (i === idx ? { ...p, handle: e.target.value } : p)),
-                        )
-                      }
-                      placeholder="@handle"
-                      maxLength={100}
-                      className="border-unsolo-border bg-unsolo-surface text-unsolo-primary flex-1 rounded-xl border px-4 py-2.5 text-sm outline-none"
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div>
-              <label className="text-unsolo-primary block text-sm font-medium">
-                Business location
-              </label>
-              <div className="mt-2 grid gap-4 sm:grid-cols-2">
-                {(["country", "state", "city", "street"] as const).map((field) => (
-                  <div key={field}>
-                    <label className="text-unsolo-muted block text-xs font-medium capitalize">
-                      {field === "state" ? "State / Region" : field}
-                    </label>
-                    <input
-                      value={address[field]}
-                      onChange={(e) => setAddress((a) => ({ ...a, [field]: e.target.value }))}
-                      maxLength={120}
-                      className={inputCls}
-                    />
-                  </div>
-                ))}
-              </div>
-              {addressPartial && (
-                <p className="mt-2 text-xs text-amber-600">
-                  Fill in all four fields, or leave them all empty.
-                </p>
-              )}
-            </div>
-          </div>
-          <div className="mt-10 flex items-center justify-between">
-            <button
-              type="button"
-              onClick={() => setStep("Basics")}
-              className="text-unsolo-muted hover:text-unsolo-primary text-sm font-medium"
-            >
-              Back
-            </button>
-            <button
-              onClick={() => setStep("Profile")}
-              disabled={addressPartial}
-              className="bg-unsolo-accent rounded-full px-8 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-            >
-              Continue
-            </button>
-          </div>
-        </div>
+      {step === "details" && (
+        <DetailsStep
+          draft={draft}
+          onChange={patchDraft}
+          serverErrors={serverErrors}
+          onBack={onBack}
+          onContinue={() => setStep("verification")}
+        />
       )}
 
-      {/* Step 3 — Business profile (logo + preview) */}
-      {step === "Profile" && (
-        <div>
-          <h2 className="text-unsolo-primary text-2xl font-bold">Business profile</h2>
-          <p className="text-unsolo-muted mt-2 text-sm">
-            How your business will appear on Unsolo.
-          </p>
-          <div className="mt-8 grid gap-8 sm:grid-cols-2">
-            <div>
-              <label className="text-unsolo-primary block text-sm font-medium">Business logo</label>
-              <div className="border-unsolo-border bg-unsolo-subtle mt-2 flex flex-col items-center justify-center rounded-xl border border-dashed px-6 py-10 text-center">
-                <span className="text-unsolo-muted text-2xl">🖼️</span>
-                <p className="text-unsolo-muted mt-2 text-sm font-medium">Logo upload</p>
-                <p className="text-unsolo-muted mt-1 text-xs">Coming soon</p>
-              </div>
-            </div>
-            <div>
-              <label className="text-unsolo-primary block text-sm font-medium">Preview</label>
-              <div className="border-unsolo-border bg-unsolo-surface mt-2 rounded-xl border p-5">
-                <div className="flex items-start gap-3">
-                  <div className="bg-unsolo-subtle text-unsolo-accent flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-lg font-bold">
-                    {businessName.trim() ? businessName.trim().charAt(0).toUpperCase() : "B"}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-unsolo-primary truncate font-semibold">
-                      {businessName.trim() || "Business name"}
-                    </p>
-                    <p className="text-unsolo-muted text-sm">
-                      @{handle.trim() || "business_handle"}
-                    </p>
-                  </div>
-                  <span className="ml-auto shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-amber-700">
-                    Not verified
-                  </span>
-                </div>
-                {description.trim() && (
-                  <p className="text-unsolo-muted mt-3 text-sm">{description.trim()}</p>
-                )}
-                {categories.length > 0 && (
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    {categories.map((c) => (
-                      <span
-                        key={c}
-                        className="bg-unsolo-subtle text-unsolo-primary rounded-full px-2.5 py-1 text-[11px] font-medium"
-                      >
-                        {c}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                {addressComplete && (
-                  <p className="text-unsolo-muted mt-3 text-xs">
-                    📍 {address.city}, {address.country}
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-          <div className="mt-10 flex items-center justify-between">
-            <button
-              type="button"
-              onClick={() => setStep("Presence")}
-              className="text-unsolo-muted hover:text-unsolo-primary text-sm font-medium"
-            >
-              Back
-            </button>
-            <button
-              onClick={() => setStep("Verification")}
-              className="bg-unsolo-accent rounded-full px-8 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90"
-            >
-              Continue
-            </button>
-          </div>
-        </div>
+      {step === "verification" && (
+        <VerificationStep
+          draft={draft}
+          onChange={patchDraft}
+          serverError={stepErrors.verification}
+          onBack={goBack}
+          onContinue={() => setStep("payout")}
+        />
       )}
 
-      {/* Step 4 — Verification */}
-      {step === "Verification" && (
-        <div>
-          <div className="flex items-center gap-3">
-            <h2 className="text-unsolo-primary text-2xl font-bold">Business verification</h2>
-            <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-amber-700">
-              Required
-            </span>
-          </div>
-          <p className="text-unsolo-muted mt-3 max-w-lg text-sm leading-relaxed">
-            Verification helps us confirm that this business is legitimate and helps protect the
-            Unsolo community. Verified businesses get a badge on their profile.
-          </p>
-
-          <div className="border-unsolo-border bg-unsolo-surface mt-8 rounded-2xl border p-6">
-            <h3 className="text-unsolo-primary text-sm font-semibold uppercase tracking-wide">
-              What verification involves
-            </h3>
-            <ul className="mt-4 space-y-3">
-              <li className="flex items-start gap-3">
-                <span className="bg-unsolo-accent mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white">
-                  ✓
-                </span>
-                <div>
-                  <p className="text-unsolo-primary text-sm font-medium">Business information</p>
-                  <p className="text-unsolo-muted text-xs">
-                    Name, handle and description — provided
-                  </p>
-                </div>
-              </li>
-              <li className="flex items-start gap-3">
-                <span
-                  className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
-                    addressComplete
-                      ? "bg-unsolo-accent text-white"
-                      : "border-unsolo-border text-unsolo-muted border"
-                  }`}
-                >
-                  {addressComplete ? "✓" : "○"}
-                </span>
-                <div>
-                  <p className="text-unsolo-primary text-sm font-medium">Business location</p>
-                  <p className="text-unsolo-muted text-xs">
-                    {addressComplete ? "Provided" : "Not provided — optional for now"}
-                  </p>
-                </div>
-              </li>
-              <li className="flex items-start gap-3">
-                <span className="border-unsolo-border text-unsolo-muted mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[11px]">
-                  ○
-                </span>
-                <div>
-                  <p className="text-unsolo-primary text-sm font-medium">
-                    Business verification documents
-                  </p>
-                  <p className="text-unsolo-muted text-xs">Coming soon</p>
-                </div>
-              </li>
-              <li className="flex items-start gap-3">
-                <span className="border-unsolo-border text-unsolo-muted mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[11px]">
-                  ○
-                </span>
-                <div>
-                  <p className="text-unsolo-primary text-sm font-medium">Verification review</p>
-                  <p className="text-unsolo-muted text-xs">Coming soon</p>
-                </div>
-              </li>
-            </ul>
-            <div className="border-unsolo-border mt-6 border-t pt-5">
-              <button
-                disabled
-                title="Coming soon"
-                className="bg-unsolo-subtle text-unsolo-muted w-full cursor-not-allowed rounded-full py-3 text-sm font-semibold"
-              >
-                Start verification — coming soon
-              </button>
-              <p className="text-unsolo-muted mt-2 text-center text-xs">
-                Verification opens in a later phase. You can create your business profile now.
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-10 flex items-center justify-between">
-            <button
-              type="button"
-              onClick={() => setStep("Profile")}
-              className="text-unsolo-muted hover:text-unsolo-primary text-sm font-medium"
-            >
-              Back
-            </button>
-            <button
-              onClick={() => setStep("Review")}
-              className="bg-unsolo-accent rounded-full px-8 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90"
-            >
-              Continue to review
-            </button>
-          </div>
-        </div>
+      {step === "payout" && (
+        <PayoutStep
+          draft={draft}
+          onChange={patchDraft}
+          serverError={stepErrors.payout}
+          onBack={goBack}
+          onContinue={() => setStep("review")}
+        />
       )}
 
-      {/* Step 5 — Review & create */}
-      {step === "Review" && (
-        <div>
-          <h2 className="text-unsolo-primary text-2xl font-bold">Review &amp; create</h2>
-          <p className="text-unsolo-muted mt-2 text-sm">
-            Confirm your business details before creating the profile.
-          </p>
-          <dl className="border-unsolo-border bg-unsolo-surface mt-8 divide-unsolo-border divide-y rounded-2xl border">
-            {[
-              ["Business name", businessName.trim()],
-              ["Handle", `@${handle.trim().toLowerCase()}`],
-              ["Description", description.trim() || "—"],
-              [
-                "Categories",
-                categories.length > 0 ? categories.join(", ") : "—",
-              ],
-              [
-                "Location",
-                addressComplete
-                  ? `${address.street}, ${address.city}, ${address.state}, ${address.country}`
-                  : "—",
-              ],
-              [
-                "Social accounts",
-                filledSocials.length > 0
-                  ? filledSocials.map((s) => `${s.platform}: ${s.handle.trim()}`).join(", ")
-                  : "—",
-              ],
-            ].map(([label, value]) => (
-              <div key={label} className="flex gap-4 px-6 py-3.5">
-                <dt className="text-unsolo-muted w-32 shrink-0 text-xs font-medium uppercase tracking-wide">
-                  {label}
-                </dt>
-                <dd className="text-unsolo-primary text-sm">{value}</dd>
-              </div>
-            ))}
-            <div className="flex items-center gap-4 px-6 py-3.5">
-              <dt className="text-unsolo-muted w-32 shrink-0 text-xs font-medium uppercase tracking-wide">
-                Verification
-              </dt>
-              <dd>
-                <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-[10px] font-semibold uppercase text-amber-700">
-                  Required — pending
-                </span>
-              </dd>
-            </div>
-          </dl>
-          {error && (
-            <p className="mt-6 rounded-lg bg-red-50 p-3 text-sm text-red-700" role="alert">
-              {error}
-            </p>
-          )}
-          <div className="mt-10 flex items-center justify-between">
-            <button
-              type="button"
-              onClick={() => setStep("Verification")}
-              className="text-unsolo-muted hover:text-unsolo-primary text-sm font-medium"
-            >
-              Back
-            </button>
-            <button
-              onClick={create}
-              disabled={loading}
-              className="bg-unsolo-accent rounded-full px-8 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-            >
-              {loading ? "Creating..." : "Create business profile"}
-            </button>
-          </div>
-        </div>
+      {step === "review" && (
+        <ReviewStep
+          draft={draft}
+          error={submitError}
+          loading={loading}
+          onEdit={(section: ReviewSection) => setStep(section)}
+          onBack={goBack}
+          onComplete={create}
+        />
       )}
 
-      {/* Created — not "live", verification still required */}
-      {step === "created" && (
-        <div>
-          <div className="flex items-start gap-4">
-            <div className="bg-unsolo-subtle flex h-12 w-12 shrink-0 items-center justify-center rounded-full">
-              <span className="text-unsolo-accent text-xl">✓</span>
-            </div>
-            <div>
-              <h2 className="text-unsolo-primary text-2xl font-bold">Business profile created</h2>
-              <p className="text-unsolo-muted mt-2 max-w-lg text-sm leading-relaxed">
-                Your business profile has been created, but verification is required before your
-                business can access all business features.
-              </p>
-            </div>
-          </div>
-          <div className="border-unsolo-border bg-unsolo-surface mt-8 rounded-2xl border p-6">
-            <div className="flex items-center justify-between">
-              <h3 className="text-unsolo-primary font-semibold">Verification</h3>
-              <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-amber-700">
-                Required
-              </span>
-            </div>
-            <p className="text-unsolo-muted mt-2 text-sm">
-              Business verification is coming soon. You&apos;ll be able to submit verification from
-              your business profile once it opens.
-            </p>
-          </div>
-          <button
-            onClick={onCreated}
-            className="bg-unsolo-accent mt-8 rounded-full px-8 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90"
-          >
-            Done
-          </button>
-        </div>
+      {step === "success" && createdProfileId && (
+        <SuccessStep
+          businessName={draft.businessName}
+          profileId={createdProfileId}
+          onDone={finish}
+        />
       )}
     </div>
   );
